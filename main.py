@@ -30,6 +30,31 @@ logger = logging.getLogger("PDF_OCR_API")
 # Carregar variáveis de ambiente
 load_dotenv()
 
+# Auto-configuração do quota project se necessário
+def auto_configure_gcloud():
+    """Configura automaticamente o Google Cloud se necessário"""
+    try:
+        import subprocess
+        
+        # Verificar se precisa configurar quota project
+        if not os.getenv("GOOGLE_CLOUD_PROJECT"):
+            logger.info("🔧 Auto-configurando Google Cloud...")
+            
+            # Executar script de configuração
+            result = subprocess.run(["python", "fix_quota_project.py"], 
+                                  capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                logger.info("✅ Google Cloud configurado automaticamente!")
+            else:
+                logger.warning(f"⚠️ Não foi possível auto-configurar: {result.stderr}")
+                
+    except Exception as e:
+        logger.warning(f"⚠️ Erro na auto-configuração: {e}")
+
+# Executar auto-configuração na inicialização
+auto_configure_gcloud()
+
 app = FastAPI(
     title="PDF OCR Vision API",
     description="API para extração de texto de arquivos PDF usando Google Cloud Vision",
