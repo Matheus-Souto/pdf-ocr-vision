@@ -15,6 +15,11 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
+# Create persistent directories for Google Cloud credentials
+RUN mkdir -p /root/.config/gcloud \
+    && mkdir -p /app/credentials \
+    && mkdir -p temp_uploads
+
 # Copy requirements first for better caching
 COPY requirements.txt .
 
@@ -24,8 +29,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY . .
 
-# Create upload directory
-RUN mkdir -p temp_uploads
+# Create symlink from volume to gcloud config directory
+RUN ln -sf /app/credentials /root/.config/gcloud || true
 
 # Expose port
 EXPOSE 8000
