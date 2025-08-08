@@ -15,10 +15,9 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Create persistent directories for Google Cloud credentials
-RUN mkdir -p /root/.config/gcloud \
-    && mkdir -p /app/credentials \
-    && mkdir -p temp_uploads
+# Create directories
+RUN mkdir -p temp_uploads \
+    && mkdir -p /app/gcloud-config
 
 # Copy requirements first for better caching
 COPY requirements.txt .
@@ -29,11 +28,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY . .
 
-# Create symlink from volume to gcloud config directory
-RUN ln -sf /app/credentials /root/.config/gcloud || true
+# Copy startup script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 # Expose port
 EXPOSE 8000
 
-# Default command - but can be overridden for setup
+# Use custom entrypoint that configures gcloud
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["python", "main.py"] 

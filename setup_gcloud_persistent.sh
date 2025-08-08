@@ -9,56 +9,91 @@ if ! command -v gcloud &> /dev/null; then
     exit 1
 fi
 
-# Verificar se o diretório de credenciais existe
-CRED_DIR="/app/credentials"
-if [ ! -d "$CRED_DIR" ]; then
-    echo "📁 Criando diretório de credenciais..."
-    mkdir -p "$CRED_DIR"
-fi
+# Definir diretórios
+GCLOUD_CONFIG_DIR="/root/.config/gcloud"
+VOLUME_CONFIG_DIR="/app/gcloud-config"
+PROJECT_ID="stable-chain-455617-v1"
 
-# Verificar se já existe configuração
-if [ -f "$CRED_DIR/application_default_credentials.json" ]; then
-    echo "✅ Credenciais já configuradas!"
-    echo "📋 Testando configuração existente..."
+# Criar diretórios se não existirem
+mkdir -p "$GCLOUD_CONFIG_DIR"
+mkdir -p "$VOLUME_CONFIG_DIR"
+
+# Verificar se já existe configuração no volume
+if [ -f "$VOLUME_CONFIG_DIR/application_default_credentials.json" ]; then
+    echo "✅ Credenciais já configuradas no volume!"
+    echo "📋 Restaurando e testando configuração existente..."
+    
+    # Restaurar do volume
+    cp -r "$VOLUME_CONFIG_DIR"/* "$GCLOUD_CONFIG_DIR/" 2>/dev/null || true
+    export GOOGLE_APPLICATION_CREDENTIALS="$GCLOUD_CONFIG_DIR/application_default_credentials.json"
+    export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
+    
+    # Testar
     python test_clean.py
     exit 0
 fi
 
 echo "📋 Passos para configuração PERSISTENTE:"
-echo "1. Fazer login no Google Cloud"
-echo "2. Configurar credenciais padrão"
-echo "3. Salvar no volume persistente"
+echo "1. Configurar projeto"
+echo "2. Fazer login no Google Cloud"
+echo "3. Configurar credenciais padrão"
+echo "4. Salvar no volume persistente"
 echo ""
 
-# Step 1: Login
-echo "🔐 Passo 1: Login no Google Cloud"
+# Step 1: Configure project
+echo "🎯 Passo 1: Configurando projeto $PROJECT_ID"
+gcloud config set project $PROJECT_ID
+
+# Step 2: Login
+echo ""
+echo "🔐 Passo 2: Login no Google Cloud"
 echo "IMPORTANTE: Use uma conta pessoal do Gmail se a organizacional tem restrições"
 echo ""
 gcloud auth login --no-launch-browser
 
-# Step 2: Set default credentials
+# Step 3: Set default credentials
 echo ""
-echo "🎯 Passo 2: Configurar credenciais padrão"
+echo "🎯 Passo 3: Configurar credenciais padrão"
 gcloud auth application-default login --no-launch-browser
 
-# Step 3: Verificar se as credenciais foram salvas no volume
+# Step 4: Save to volume
 echo ""
-echo "🔍 Passo 3: Verificando persistência..."
-if [ -f "/root/.config/gcloud/application_default_credentials.json" ]; then
-    # Copiar para o volume persistente se necessário
-    cp /root/.config/gcloud/application_default_credentials.json "$CRED_DIR/"
-    cp -r /root/.config/gcloud/* "$CRED_DIR/" 2>/dev/null || true
-    echo "✅ Credenciais salvas no volume persistente!"
+echo "🔍 Passo 4: Salvando no volume persistente..."
+if [ -f "$GCLOUD_CONFIG_DIR/application_default_credentials.json" ]; then
+    # Copiar TUDO do gcloud config para o volume
+    cp -r "$GCLOUD_CONFIG_DIR"/* "$VOLUME_CONFIG_DIR/" 2>/dev/null || true
+    
+    # Verificar se salvou
+    if [ -f "$VOLUME_CONFIG_DIR/application_default_credentials.json" ]; then
+        echo "✅ Credenciais salvas no volume persistente!"
+        
+        # Configurar variáveis de ambiente
+        export GOOGLE_APPLICATION_CREDENTIALS="$GCLOUD_CONFIG_DIR/application_default_credentials.json"
+        export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
+        
+    else
+        echo "❌ Erro ao salvar no volume"
+        exit 1
+    fi
 else
-    echo "⚠️ Credenciais não encontradas, verifique a configuração"
+    echo "⚠️ Credenciais não encontradas em $GCLOUD_CONFIG_DIR"
+    echo "🔍 Verificando diretório..."
+    ls -la "$GCLOUD_CONFIG_DIR"
+    exit 1
 fi
 
-# Step 4: Test
+# Step 5: Test
 echo ""
-echo "🧪 Passo 4: Testando configuração..."
+echo "🧪 Passo 5: Testando configuração..."
 python test_clean.py
 
 echo ""
 echo "✅ Configuração persistente concluída!"
-echo "💡 As credenciais serão mantidas mesmo após restart do container"
-echo "💡 Agora você pode executar: python main.py" 
+echo "💡 As credenciais foram salvas em: $VOLUME_CONFIG_DIR"
+echo "💡 Elas serão restauradas automaticamente na próxima inicialização"
+echo "💡 Agora você pode executar: python main.py"
+
+# Listar arquivos salvos no volume
+echo ""
+echo "📁 Arquivos salvos no volume:"
+ls -la "$VOLUME_CONFIG_DIR" 
