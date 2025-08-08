@@ -1,6 +1,8 @@
 import os
 import io
 import tempfile
+import logging
+import datetime
 from typing import List, Optional
 from pathlib import Path
 
@@ -14,6 +16,16 @@ from pdf2image import convert_from_bytes
 from PIL import Image
 import aiofiles
 from dotenv import load_dotenv
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Console output
+    ]
+)
+logger = logging.getLogger("PDF_OCR_API")
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -214,7 +226,7 @@ def extract_text_from_image(image: Image.Image) -> dict:
         raise
     except Exception as e:
         error_msg = f"Erro na extração de texto: {str(e)}"
-        print(f"DEBUG: {error_msg}")  # Log para debug
+        logger.error(f"❌ Vision API - {error_msg}")
         raise HTTPException(status_code=500, detail=error_msg)
 
 def process_agibank_demonstrativo_text(raw_text: str) -> str:
@@ -375,8 +387,12 @@ async def extract_text_from_pdf(
         TextExtractionResponse com o texto extraído
     """
     
+    start_time = datetime.datetime.now()
+    logger.info(f"🚀 INICIANDO EXTRAÇÃO - Arquivo: {file.filename}, Tamanho: {file.size if hasattr(file, 'size') else 'N/A'} bytes")
+    
     # Validar tipo de arquivo
     if not file.filename.lower().endswith('.pdf'):
+        logger.error(f"❌ Tipo de arquivo inválido: {file.filename}")
         raise HTTPException(
             status_code=400,
             detail="Apenas arquivos PDF são suportados"
@@ -384,11 +400,15 @@ async def extract_text_from_pdf(
     
     try:
         # Ler conteúdo do arquivo
+        logger.info(f"📖 Lendo conteúdo do arquivo PDF...")
         pdf_content = await file.read()
+        logger.info(f"✅ Arquivo lido com sucesso: {len(pdf_content)} bytes")
         
         # Converter PDF para imagens
+        logger.info(f"🖼️ Convertendo PDF para imagens...")
         images = pdf_to_images(pdf_content)
         total_pages = len(images)
+        logger.info(f"✅ PDF convertido: {total_pages} página(s)")
         
         # Determinar quais páginas processar
         pages_to_process = list(range(total_pages))
@@ -396,27 +416,44 @@ async def extract_text_from_pdf(
             try:
                 specified_pages = [int(p.strip()) - 1 for p in extract_pages.split(",")]
                 pages_to_process = [p for p in specified_pages if 0 <= p < total_pages]
+                logger.info(f"🎯 Páginas específicas selecionadas: {[p+1 for p in pages_to_process]}")
             except ValueError:
+                logger.error(f"❌ Formato inválido de páginas: {extract_pages}")
                 raise HTTPException(
                     status_code=400,
                     detail="Formato inválido para páginas. Use números separados por vírgula (ex: '1,3,5')"
                 )
+        else:
+            logger.info(f"📄 Processando todas as páginas: {total_pages}")
         
         # Extrair texto de cada página
         extracted_pages = []
+        logger.info(f"🔍 Iniciando extração OCR...")
         
         for i, page_num in enumerate(pages_to_process):
+            page_start = datetime.datetime.now()
+            logger.info(f"  📃 Processando página {page_num + 1}/{total_pages}...")
+            
             image = images[page_num]
             page_result = extract_text_from_image(image)
+            
+            page_elapsed = (datetime.datetime.now() - page_start).total_seconds()
+            words_count = page_result["words_count"]
             
             page_data = {
                 "page_number": page_num + 1,
                 "text": page_result["text"],
                 "confidence": page_result["confidence"],
-                "words_count": page_result["words_count"]
+                "words_count": words_count
             }
             
+            logger.info(f"  ✅ Página {page_num + 1} processada - {words_count} palavras em {page_elapsed:.2f}s")
             extracted_pages.append(page_data)
+        
+        total_elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        total_words = sum(page["words_count"] for page in extracted_pages)
+        
+        logger.info(f"🎉 EXTRAÇÃO CONCLUÍDA - {len(pages_to_process)} páginas, {total_words} palavras em {total_elapsed:.2f}s")
         
         return TextExtractionResponse(
             pages=extracted_pages,
@@ -426,8 +463,11 @@ async def extract_text_from_pdf(
         )
         
     except HTTPException:
+        logger.error(f"❌ HTTPException: {str(e)}")
         raise
     except Exception as e:
+        total_elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        logger.error(f"💥 ERRO na extração após {total_elapsed:.2f}s: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Erro interno do servidor: {str(e)}"
@@ -522,8 +562,12 @@ async def extract_text_agibank_demonstrativo(
         AgibankResponse com texto da área do demonstrativo
     """
     
+    start_time = datetime.datetime.now()
+    logger.info(f"🏦 AGIBANK - INICIANDO extração de demonstrativo - Arquivo: {file.filename}")
+    
     # Validar tipo de arquivo
     if not file.filename.lower().endswith('.pdf'):
+        logger.error(f"❌ AGIBANK - Tipo de arquivo inválido: {file.filename}")
         raise HTTPException(
             status_code=400,
             detail="Apenas arquivos PDF são suportados"
@@ -531,11 +575,14 @@ async def extract_text_agibank_demonstrativo(
     
     try:
         # Ler conteúdo do arquivo
+        logger.info(f"🏦 AGIBANK - Lendo conteúdo do PDF...")
         pdf_content = await file.read()
         
         # Converter PDF para imagens
+        logger.info(f"🏦 AGIBANK - Convertendo PDF para imagens...")
         images = pdf_to_images(pdf_content)
         total_pages = len(images)
+        logger.info(f"🏦 AGIBANK - {total_pages} página(s) convertida(s)")
         
         # Determinar quais páginas processar
         pages_to_process = list(range(total_pages))
@@ -592,8 +639,12 @@ async def extract_text_bmg_transacoes(
         BmgResponse com texto da área das transações
     """
     
+    start_time = datetime.datetime.now()
+    logger.info(f"🏧 BMG - INICIANDO extração de transações - Arquivo: {file.filename}")
+    
     # Validar tipo de arquivo
     if not file.filename.lower().endswith('.pdf'):
+        logger.error(f"❌ BMG - Tipo de arquivo inválido: {file.filename}")
         raise HTTPException(
             status_code=400,
             detail="Apenas arquivos PDF são suportados"
@@ -601,11 +652,14 @@ async def extract_text_bmg_transacoes(
     
     try:
         # Ler conteúdo do arquivo
+        logger.info(f"🏧 BMG - Lendo conteúdo do PDF...")
         pdf_content = await file.read()
         
         # Converter PDF para imagens
+        logger.info(f"🏧 BMG - Convertendo PDF para imagens...")
         images = pdf_to_images(pdf_content)
         total_pages = len(images)
+        logger.info(f"🏧 BMG - {total_pages} página(s) convertida(s)")
         
         # Determinar quais páginas processar
         pages_to_process = list(range(total_pages))
