@@ -188,7 +188,7 @@ def crop_bmg_transacoes_area(image: Image.Image) -> Image.Image:
     # Área central-esquerda onde estão as transações
     left = 0    # Começa na posição 0 da largura (extrema esquerda)
     top = int(height * 0.05)    # Começa em 5% da altura (quase no topo)
-    right = int(width * 0.66)   # Vai até 66% da largura (área das transações)
+    right = int(width * 0.92)   # Vai até 95% da largura (quase toda a largura)
     bottom = int(height * 0.65)  # Vai até 65% da altura (área das transações)
     
     # Recortar a área específica
