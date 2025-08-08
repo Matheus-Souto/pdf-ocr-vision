@@ -1,0 +1,12 @@
+venv/
+.env
+*.pyc
+__pycache__/
+.git/
+.gitignore
+README.md
+QUICKSTART.md
+DEPLOY_DIGITAL_OCEAN.md
+install_gcloud.md
+temp_uploads/*
+!temp_uploads/.gitkeep 
