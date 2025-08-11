@@ -354,7 +354,12 @@ def extract_text_from_bmg_transacoes(image: Image.Image) -> str:
         return processed_text
         
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"❌ BMG - Erro na extração: {str(e)}")
+        logger.error(f"❌ BMG - Traceback completo: {error_details}")
         print(f"DEBUG: Erro na extração BMG: {str(e)}")
+        print(f"DEBUG: Traceback: {error_details}")
         return ""
 
 @app.get("/")
