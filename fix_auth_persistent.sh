@@ -42,21 +42,25 @@ echo "🎯 Configurando projeto $PROJECT_ID..."
 gcloud config set project $PROJECT_ID
 
 # Tentar listar projetos para verificar se a auth funciona
-echo "🧪 Testando autenticação atual..."
+echo "🧪 Testando autenticação gcloud atual..."
 if gcloud projects list --limit=1 >/dev/null 2>&1; then
-    echo "✅ Autenticação funcionando!"
+    echo "✅ Autenticação gcloud funcionando!"
     
     # Testar credenciais de aplicação
     echo "🧪 Testando Application Default Credentials..."
     export GOOGLE_APPLICATION_CREDENTIALS="$GCLOUD_CONFIG_DIR/application_default_credentials.json"
     export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
     
-    python test_clean.py
+    python test_api_working.py
     
     if [ $? -eq 0 ]; then
-        echo "✅ Tudo funcionando perfeitamente!"
+        echo "✅ API funcionando perfeitamente! Nenhuma correção necessária."
         exit 0
+    else
+        echo "⚠️ Application Default Credentials precisam ser renovadas"
     fi
+else
+    echo "⚠️ Problema com autenticação gcloud"
 fi
 
 echo "⚠️ Credenciais expiraram ou há problema de permissão"
@@ -107,7 +111,9 @@ fi
 # Step 4: Test
 echo ""
 echo "🧪 Passo 4: Testando configuração atualizada..."
-python test_clean.py
+export GOOGLE_APPLICATION_CREDENTIALS="$GCLOUD_CONFIG_DIR/application_default_credentials.json"
+export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
+python test_api_working.py
 
 echo ""
 echo "✅ Reautenticação concluída!"
