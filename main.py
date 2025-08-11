@@ -344,6 +344,38 @@ def process_agibank_demonstrativo_text(raw_text: str) -> str:
     
     return ' | '.join(processed_transactions) if processed_transactions else raw_text
 
+def process_single_agibank_page(image: Image.Image, page_num: int) -> tuple:
+    """
+    Processa uma única página Agibank e retorna o texto extraído.
+    Retorna: (page_num, texto_extraido, tempo_processamento, erro)
+    """
+    try:
+        start_time = datetime.datetime.now()
+        
+        # Recortar área específica do demonstrativo
+        cropped_image = crop_agibank_demonstrativo_area(image)
+        
+        # Extrair texto da área recortada
+        result = extract_text_from_image(cropped_image)
+        
+        # Processar o texto para associar títulos com valores
+        processed_text = process_agibank_demonstrativo_text(result["text"])
+        
+        # Liberar recursos
+        if hasattr(cropped_image, 'close'):
+            cropped_image.close()
+        
+        process_time = (datetime.datetime.now() - start_time).total_seconds()
+        
+        return (page_num, processed_text, process_time, None)
+        
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"❌ AGIBANK - Erro na página {page_num}: {str(e)}")
+        process_time = (datetime.datetime.now() - start_time).total_seconds()
+        return (page_num, "", process_time, str(e))
+
 def extract_text_from_agibank_demonstrativo(image: Image.Image) -> str:
     """Extrai texto apenas da área do demonstrativo da fatura Agibank"""
     try:
@@ -675,11 +707,28 @@ async def extract_text_agibank_demonstrativo(
         logger.info(f"🏦 AGIBANK - Lendo conteúdo do PDF...")
         pdf_content = await file.read()
         
-        # Converter PDF para imagens
-        logger.info(f"🏦 AGIBANK - Convertendo PDF para imagens...")
-        images = pdf_to_images(pdf_content)
-        total_pages = len(images)
-        logger.info(f"🏦 AGIBANK - {total_pages} página(s) convertida(s)")
+        # Descobrir número total de páginas sem carregar todas na memória
+        logger.info(f"🏦 AGIBANK - Analisando PDF (modo economia de memória)...")
+        try:
+            # Tentar descobrir o número de páginas de forma eficiente
+            test_images = convert_from_bytes(
+                pdf_content,
+                dpi=72,  # DPI muito baixo só para contar
+                fmt='PNG',
+                thread_count=1
+            )
+            total_pages = len(test_images)
+            # Liberar imagens de teste imediatamente
+            for img in test_images:
+                if hasattr(img, 'close'):
+                    img.close()
+            del test_images
+            gc.collect()
+        except Exception as e:
+            logger.error(f"❌ AGIBANK - Erro ao analisar PDF: {str(e)}")
+            raise HTTPException(status_code=400, detail="PDF inválido ou corrompido")
+        
+        logger.info(f"🏦 AGIBANK - PDF contém {total_pages} página(s)")
         
         # Determinar quais páginas processar
         pages_to_process = list(range(total_pages))
@@ -693,20 +742,118 @@ async def extract_text_agibank_demonstrativo(
                     detail="Formato inválido para páginas. Use números separados por vírgula (ex: '1,3,5')"
                 )
         
-        # Extrair texto da área do demonstrativo de cada página
-        demonstrativo_texts = []
+        # Log de informação sobre o processamento
+        logger.info(f"🏦 AGIBANK - Processando {len(pages_to_process)} páginas (uma por vez)")
         
-        for page_num in pages_to_process:
-            image = images[page_num]
-            # Extrair apenas da área do demonstrativo
-            demonstrativo_text = extract_text_from_agibank_demonstrativo(image)
-            demonstrativo_texts.append(demonstrativo_text)
+        # Estimar tempo de processamento
+        estimated_time = len(pages_to_process) * 12  # ~12 segundos por página no modo economia
+        if estimated_time > 300:  # 5 minutos
+            logger.warning(f"⚠️ AGIBANK - Tempo estimado alto: {estimated_time}s - Considere usar 'extract_pages' para páginas específicas")
+        
+        logger.info(f"🏦 AGIBANK - Tempo estimado: {estimated_time}s para {len(pages_to_process)} páginas")
+        
+        # Processamento página por página (modo economia de memória)
+        logger.info(f"🏦 AGIBANK - Modo economia de memória ativado")
+        logger.info(f"🏦 AGIBANK - Iniciando processamento página por página")
+        demonstrativo_texts = []
+        total_processing_time = 0
+        
+        for i, page_index in enumerate(pages_to_process):
+            page_num = page_index + 1
+            
+            try:
+                logger.info(f"🏦 AGIBANK - Carregando página {page_num}/{total_pages}...")
+                
+                # Carregar APENAS esta página do PDF
+                page_images = convert_from_bytes(
+                    pdf_content,
+                    dpi=200,  # DPI adequado para OCR
+                    first_page=page_num,
+                    last_page=page_num,
+                    fmt='PNG',
+                    thread_count=1
+                )
+                
+                if not page_images:
+                    logger.error(f"❌ AGIBANK - Não foi possível carregar página {page_num}")
+                    demonstrativo_texts.append("")
+                    continue
+                
+                image = page_images[0]
+                
+                # Otimizar tamanho se necessário
+                if image.size[0] > 2000 or image.size[1] > 3000:
+                    ratio = min(2000 / image.size[0], 3000 / image.size[1])
+                    new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+                    optimized_image = image.resize(new_size, Image.Resampling.LANCZOS)
+                    logger.info(f"📏 AGIBANK - Página {page_num} redimensionada: {image.size} → {new_size}")
+                    
+                    # Liberar imagem original
+                    image.close()
+                    image = optimized_image
+                
+                logger.info(f"🏦 AGIBANK - Processando página {page_num}/{total_pages}...")
+                
+                # Processar uma página por vez
+                page_num_result, text, process_time, error = process_single_agibank_page(image, page_num)
+                
+                if error:
+                    logger.error(f"❌ AGIBANK - Página {page_num} teve erro: {error}")
+                    demonstrativo_texts.append("")
+                else:
+                    logger.info(f"✅ AGIBANK - Página {page_num} processada em {process_time:.2f}s")
+                    demonstrativo_texts.append(text)
+                
+                total_processing_time += process_time
+                
+                # Liberar toda a memória da página atual
+                image.close()
+                for img in page_images:
+                    if hasattr(img, 'close'):
+                        img.close()
+                del page_images
+                del image
+                
+                # Forçar limpeza de memória após cada página
+                gc.collect()
+                
+                # Pequena pausa para estabilizar memória
+                await asyncio.sleep(0.2)
+                
+                logger.info(f"🧹 AGIBANK - Página {page_num} liberada da memória")
+                
+            except Exception as e:
+                logger.error(f"❌ AGIBANK - Erro inesperado na página {page_num}: {str(e)}")
+                demonstrativo_texts.append("")
+                
+                # Forçar limpeza mesmo em erro
+                try:
+                    if 'image' in locals() and hasattr(image, 'close'):
+                        image.close()
+                    if 'page_images' in locals():
+                        for img in page_images:
+                            if hasattr(img, 'close'):
+                                img.close()
+                        del page_images
+                except:
+                    pass
+                gc.collect()
+        
+        # Liberação final de memória (limpeza geral)
+        gc.collect()
+        logger.info(f"🧹 AGIBANK - Limpeza final de memória concluída")
+        
+        # Calcular tempo total
+        total_elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        pages_processed = len([t for t in demonstrativo_texts if t.strip()])  # Páginas com conteúdo
+        
+        logger.info(f"🎉 AGIBANK - CONCLUÍDO: {pages_processed}/{len(demonstrativo_texts)} páginas em {total_elapsed:.2f}s (tempo processamento: {total_processing_time:.2f}s)")
         
         return AgibankResponse(
             demonstrativo_pages=demonstrativo_texts,
             total_pages=len(demonstrativo_texts),
             success=True,
-            message=f"Área do demonstrativo extraída com sucesso de {len(demonstrativo_texts)} página(s) da fatura Agibank"
+            message=f"Área do demonstrativo extraída de {pages_processed}/{len(demonstrativo_texts)} página(s) em {total_elapsed:.1f}s (modo economia de memória)"
         )
         
     except HTTPException:
