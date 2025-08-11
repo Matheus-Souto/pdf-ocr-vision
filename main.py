@@ -55,6 +55,31 @@ def auto_configure_gcloud():
 # Executar auto-configuração na inicialização
 auto_configure_gcloud()
 
+# Garantir que as credenciais corretas estão carregadas
+def ensure_correct_credentials():
+    """Garante que as credenciais corretas estão sendo usadas"""
+    try:
+        # Verificar se há um arquivo de Service Account vazio que está causando problemas
+        service_account_file = "/app/gcloud-config/service-account-key.json"
+        if os.path.exists(service_account_file) and os.path.getsize(service_account_file) == 0:
+            logger.warning(f"⚠️ Arquivo Service Account vazio detectado: {service_account_file}")
+            # Remover a variável que aponta para ele
+            os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+        
+        # Configurar para usar Application Default Credentials
+        adc_file = "/root/.config/gcloud/application_default_credentials.json"
+        if os.path.exists(adc_file):
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = adc_file
+            os.environ["GOOGLE_CLOUD_PROJECT"] = "stable-chain-455617-v1"
+            logger.info("✅ Configuradas Application Default Credentials para a aplicação")
+        else:
+            logger.warning("⚠️ Application Default Credentials não encontradas")
+            
+    except Exception as e:
+        logger.error(f"❌ Erro ao configurar credenciais: {e}")
+
+ensure_correct_credentials()
+
 app = FastAPI(
     title="PDF OCR Vision API",
     description="API para extração de texto de arquivos PDF usando Google Cloud Vision",
@@ -85,13 +110,20 @@ def get_vision_client():
     global vision_client
     if vision_client is None:
         try:
-            # Tentar credenciais por arquivo primeiro
-            if GOOGLE_APPLICATION_CREDENTIALS and Path(GOOGLE_APPLICATION_CREDENTIALS).exists():
-                vision_client = vision.ImageAnnotatorClient()
-            else:
-                # Tentar Application Default Credentials
-                vision_client = vision.ImageAnnotatorClient()
+            # Primeiro, limpar qualquer variável que aponte para arquivo inválido
+            service_account_file = "/app/gcloud-config/service-account-key.json"
+            if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") == service_account_file:
+                # Se está apontando para o arquivo vazio, remover a variável
+                if os.path.exists(service_account_file) and os.path.getsize(service_account_file) == 0:
+                    os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+                    logger.info("🔧 Removida referência a arquivo de Service Account vazio")
+            
+            # Usar Application Default Credentials (que sabemos que funcionam)
+            vision_client = vision.ImageAnnotatorClient()
+            logger.info("✅ Cliente Vision criado com Application Default Credentials")
+            
         except Exception as e:
+            logger.error(f"❌ Erro na criação do cliente Vision: {str(e)}")
             raise HTTPException(
                 status_code=503, 
                 detail=f"Erro na configuração do Google Cloud Vision: {str(e)}"
