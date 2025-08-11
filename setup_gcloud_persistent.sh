@@ -28,9 +28,24 @@ if [ -f "$VOLUME_CONFIG_DIR/application_default_credentials.json" ]; then
     export GOOGLE_APPLICATION_CREDENTIALS="$GCLOUD_CONFIG_DIR/application_default_credentials.json"
     export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
     
+    # Configurar projeto
+    gcloud config set project $PROJECT_ID
+    
     # Testar
+    echo "🧪 Testando credenciais existentes..."
     python test_clean.py
-    exit 0
+    
+    # Se o teste falhou, as credenciais podem ter expirado
+    if [ $? -ne 0 ]; then
+        echo ""
+        echo "⚠️ As credenciais existentes parecem ter expirado!"
+        echo "💡 Para reautenticar, execute: ./fix_auth_persistent.sh"
+        echo "💡 Ou continue com a configuração completa pressionando Enter..."
+        read -p "Pressione Enter para continuar ou Ctrl+C para sair..."
+    else
+        echo "✅ Credenciais funcionando perfeitamente!"
+        exit 0
+    fi
 fi
 
 echo "📋 Passos para configuração PERSISTENTE:"
