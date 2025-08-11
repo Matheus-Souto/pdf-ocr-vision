@@ -752,11 +752,28 @@ async def extract_text_bmg_transacoes(
         logger.info(f"🏧 BMG - Lendo conteúdo do PDF...")
         pdf_content = await file.read()
         
-        # Converter PDF para imagens
-        logger.info(f"🏧 BMG - Convertendo PDF para imagens...")
-        images = pdf_to_images(pdf_content)
-        total_pages = len(images)
-        logger.info(f"🏧 BMG - {total_pages} página(s) convertida(s)")
+        # Descobrir número total de páginas sem carregar todas na memória
+        logger.info(f"🏧 BMG - Analisando PDF (modo economia de memória)...")
+        try:
+            # Tentar descobrir o número de páginas de forma eficiente
+            test_images = convert_from_bytes(
+                pdf_content,
+                dpi=72,  # DPI muito baixo só para contar
+                fmt='PNG',
+                thread_count=1
+            )
+            total_pages = len(test_images)
+            # Liberar imagens de teste imediatamente
+            for img in test_images:
+                if hasattr(img, 'close'):
+                    img.close()
+            del test_images
+            gc.collect()
+        except Exception as e:
+            logger.error(f"❌ BMG - Erro ao analisar PDF: {str(e)}")
+            raise HTTPException(status_code=400, detail="PDF inválido ou corrompido")
+        
+        logger.info(f"🏧 BMG - PDF contém {total_pages} página(s)")
         
         # Determinar quais páginas processar
         pages_to_process = list(range(total_pages))
@@ -771,82 +788,109 @@ async def extract_text_bmg_transacoes(
                 )
         
         # Log de informação sobre o processamento
-        logger.info(f"🏧 BMG - Processando {len(pages_to_process)} páginas")
+        logger.info(f"🏧 BMG - Processando {len(pages_to_process)} páginas (uma por vez)")
         
         # Estimar tempo de processamento
-        estimated_time = len(pages_to_process) * 12  # ~12 segundos por página
-        if estimated_time > 180:  # 3 minutos
-            logger.warning(f"⚠️ BMG - Tempo estimado muito alto: {estimated_time}s")
+        estimated_time = len(pages_to_process) * 15  # ~15 segundos por página no modo economia
+        if estimated_time > 300:  # 5 minutos
+            logger.warning(f"⚠️ BMG - Tempo estimado alto: {estimated_time}s - Considere usar 'extract_pages' para páginas específicas")
         
         logger.info(f"🏧 BMG - Tempo estimado: {estimated_time}s para {len(pages_to_process)} páginas")
-        
-        # Selecionar apenas as imagens necessárias
-        selected_images = [images[i] for i in pages_to_process]
-        
-        # Otimizar tamanho das imagens se muito grandes
-        optimized_images = []
-        for i, img in enumerate(selected_images):
-            if img.size[0] > 2000 or img.size[1] > 3000:
-                # Redimensionar mantendo proporção
-                ratio = min(2000 / img.size[0], 3000 / img.size[1])
-                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-                optimized_img = img.resize(new_size, Image.Resampling.LANCZOS)
-                logger.info(f"📏 BMG - Página {i+1} redimensionada: {img.size} → {new_size}")
-                optimized_images.append(optimized_img)
-            else:
-                optimized_images.append(img)
         
         # Extrair texto da área das transações de cada página
         transacoes_texts = []
         
-        logger.info(f"🏧 BMG - Iniciando processamento paralelo de {len(optimized_images)} páginas")
+        logger.info(f"🏧 BMG - Modo economia de memória ativado")
         
-        # Processar páginas em paralelo com ThreadPoolExecutor
-        def process_page_wrapper(args):
-            image, page_idx = args
-            page_num = pages_to_process[page_idx]
-            return process_single_bmg_page(image, page_num + 1)
+
         
-        # Determinar número de workers baseado no número de páginas
-        max_workers = min(4, len(optimized_images))  # Máximo 4 threads simultâneas
-        logger.info(f"🏧 BMG - Usando {max_workers} threads para processamento")
-        
-        # Preparar argumentos para o pool
-        page_args = [(image, i) for i, image in enumerate(optimized_images)]
-        
-        # Executar processamento paralelo
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Executar de forma assíncrona para não bloquear
-            results = await loop.run_in_executor(
-                executor,
-                lambda: list(executor.map(process_page_wrapper, page_args))
-            )
-        
-        # Ordenar resultados por número da página
-        results.sort(key=lambda x: x[0])
-        
-        # Extrair textos e logs dos resultados
+        # Processamento página por página (modo economia de memória)
+        logger.info(f"🏧 BMG - Iniciando processamento página por página")
         transacoes_texts = []
         total_processing_time = 0
         
-        for page_num, text, process_time, error in results:
-            if error:
-                logger.error(f"❌ BMG - Página {page_num} teve erro: {error}")
-                transacoes_texts.append("")
-            else:
-                logger.info(f"✅ BMG - Página {page_num} processada em {process_time:.2f}s")
-                transacoes_texts.append(text)
+        for i, page_index in enumerate(pages_to_process):
+            page_num = page_index + 1
             
-            total_processing_time += process_time
+            try:
+                logger.info(f"🏧 BMG - Carregando página {page_num}/{total_pages}...")
+                
+                # Carregar APENAS esta página do PDF
+                page_images = convert_from_bytes(
+                    pdf_content,
+                    dpi=200,  # DPI adequado para OCR
+                    first_page=page_num,
+                    last_page=page_num,
+                    fmt='PNG',
+                    thread_count=1
+                )
+                
+                if not page_images:
+                    logger.error(f"❌ BMG - Não foi possível carregar página {page_num}")
+                    transacoes_texts.append("")
+                    continue
+                
+                image = page_images[0]
+                
+                # Otimizar tamanho se necessário
+                if image.size[0] > 2000 or image.size[1] > 3000:
+                    ratio = min(2000 / image.size[0], 3000 / image.size[1])
+                    new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+                    optimized_image = image.resize(new_size, Image.Resampling.LANCZOS)
+                    logger.info(f"📏 BMG - Página {page_num} redimensionada: {image.size} → {new_size}")
+                    
+                    # Liberar imagem original
+                    image.close()
+                    image = optimized_image
+                
+                logger.info(f"🏧 BMG - Processando página {page_num}/{total_pages}...")
+                
+                # Processar uma página por vez
+                page_num_result, text, process_time, error = process_single_bmg_page(image, page_num)
+                
+                if error:
+                    logger.error(f"❌ BMG - Página {page_num} teve erro: {error}")
+                    transacoes_texts.append("")
+                else:
+                    logger.info(f"✅ BMG - Página {page_num} processada em {process_time:.2f}s")
+                    transacoes_texts.append(text)
+                
+                total_processing_time += process_time
+                
+                # Liberar toda a memória da página atual
+                image.close()
+                for img in page_images:
+                    if hasattr(img, 'close'):
+                        img.close()
+                del page_images
+                del image
+                
+                # Forçar limpeza de memória após cada página
+                gc.collect()
+                
+                # Pequena pausa para estabilizar memória
+                await asyncio.sleep(0.2)
+                
+                logger.info(f"🧹 BMG - Página {page_num} liberada da memória")
+                
+            except Exception as e:
+                logger.error(f"❌ BMG - Erro inesperado na página {page_num}: {str(e)}")
+                transacoes_texts.append("")
+                
+                # Forçar limpeza mesmo em erro
+                try:
+                    if 'image' in locals() and hasattr(image, 'close'):
+                        image.close()
+                    if 'page_images' in locals():
+                        for img in page_images:
+                            if hasattr(img, 'close'):
+                                img.close()
+                        del page_images
+                except:
+                    pass
+                gc.collect()
         
-        # Liberação final de memória
-        import gc
-        for img in optimized_images:
-            if hasattr(img, 'close'):
-                img.close()
-        del optimized_images
-        del selected_images
+        # Liberação final de memória (limpeza geral)
         gc.collect()
         logger.info(f"🧹 BMG - Limpeza final de memória concluída")
         
@@ -854,13 +898,13 @@ async def extract_text_bmg_transacoes(
         total_elapsed = (datetime.datetime.now() - start_time).total_seconds()
         pages_processed = len([t for t in transacoes_texts if t.strip()])  # Páginas com conteúdo
         
-        logger.info(f"🎉 BMG - CONCLUÍDO: {pages_processed}/{len(transacoes_texts)} páginas em {total_elapsed:.2f}s (processamento paralelo: {total_processing_time:.2f}s)")
+        logger.info(f"🎉 BMG - CONCLUÍDO: {pages_processed}/{len(transacoes_texts)} páginas em {total_elapsed:.2f}s (tempo processamento: {total_processing_time:.2f}s)")
         
         return BmgResponse(
             transacoes_pages=transacoes_texts,
             total_pages=len(transacoes_texts),
             success=True,
-            message=f"Área das transações extraída de {pages_processed}/{len(transacoes_texts)} página(s) em {total_elapsed:.1f}s com processamento paralelo ({max_workers} threads)"
+            message=f"Área das transações extraída de {pages_processed}/{len(transacoes_texts)} página(s) em {total_elapsed:.1f}s (modo economia de memória)"
         )
         
     except HTTPException:
